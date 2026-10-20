@@ -4,15 +4,59 @@ const key = 'clearcheck-v1';
 let checks = [];
 try { const saved = JSON.parse(localStorage.getItem(key) || '[]'); if (!Array.isArray(saved)) throw Error(); checks = saved; } catch { alert('Saved data could not be read. Please restore your records before adding new checks.'); }
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const typesKey = 'clearcheck-types-v1';
+let customTypes = [];
+try {
+  const stored = JSON.parse(localStorage.getItem(typesKey) || '[]');
+  if (!Array.isArray(stored) || stored.some(t => typeof t !== 'string' || !t.trim())) throw Error();
+  customTypes = stored;
+} catch { alert('Saved check types could not be read. Existing records have been kept.'); }
+const typeSelect = $('#check-form').elements.type;
+function availableTypes() {
+  return [...new Set(['Background check', 'Registry check', ...customTypes, ...checks.map(c => c.type)])];
+}
+function refreshTypes() {
+  const selected = typeSelect.value, filter = $('#type').value;
+  const options = availableTypes().map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('');
+  typeSelect.innerHTML = options + '<option value="">＋ Create new type…</option>';
+  typeSelect.value = availableTypes().includes(selected) ? selected : 'Background check';
+  $('#type').innerHTML = '<option value="">All check types</option>' + availableTypes().map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('');
+  $('#type').value = availableTypes().includes(filter) ? filter : '';
+}
+let previousType = 'Background check';
+function closeTypeCreator() {
+  $('#new-type-fields').hidden = true;
+  $('#new-type-name').value = '';
+  $('#type-error').textContent = '';
+}
+typeSelect.onchange = () => {
+  if (typeSelect.value) { previousType = typeSelect.value; closeTypeCreator(); }
+  else { $('#new-type-fields').hidden = false; $('#new-type-name').focus(); }
+};
+$('#cancel-type').onclick = () => { typeSelect.value = previousType; closeTypeCreator(); };
+function saveType() {
+  const name = $('#new-type-name').value.trim().replace(/\s+/g, ' ');
+  if (!name) { $('#type-error').textContent = 'Enter a name for the new check type.'; $('#new-type-name').focus(); return; }
+  const existing = availableTypes().find(t => t.toLowerCase() === name.toLowerCase());
+  if (!existing) {
+    try { localStorage.setItem(typesKey, JSON.stringify([...customTypes, name])); customTypes.push(name); }
+    catch { $('#type-error').textContent = 'Unable to save this type. Browser storage may be unavailable.'; return; }
+  }
+  refreshTypes(); typeSelect.value = existing || name; previousType = typeSelect.value;
+  closeTypeCreator(); notify(existing ? 'Existing check type selected' : 'Check type saved');
+}
+$('#save-type').onclick = saveType;
+$('#new-type-name').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); saveType(); } };
 const format = d => new Date(d + 'T12:00:00').toLocaleDateString(undefined, {month:'short',day:'numeric',year:'numeric'});
 const recurrence = c => c.interval ? `Every ${c.interval} ${c.interval === 1 ? c.unit.slice(0,-1) : c.unit}` : 'One-time';
 function notify(message) { $('#toast').textContent = message; $('#toast').hidden = false; setTimeout(() => $('#toast').hidden = true, 3500); }
 function save(next) { try { localStorage.setItem(key, JSON.stringify(next)); checks = next; render(); return true; } catch { alert('Unable to save. Browser storage may be full or unavailable. Export your existing data before continuing.'); return false; } }
 function visible() {
   const search = $('#search').value.trim().toLowerCase();
-  return checks.filter(c => `${c.employee} ${c.role} ${c.title} ${c.type}`.toLowerCase().includes(search) && ($('#status').value === 'all' || status(c) === $('#status').value) && ($('#type').value === 'all' || c.type === $('#type').value) && (!$('#from').value || c.due >= $('#from').value) && (!$('#to').value || c.due <= $('#to').value)).sort((a,b) => $('#sort').value === 'name' ? a.employee.localeCompare(b.employee) : (a.due.localeCompare(b.due) * ($('#sort').value === 'desc' ? -1 : 1)));
+  return checks.filter(c => `${c.employee} ${c.role} ${c.title} ${c.type}`.toLowerCase().includes(search) && ($('#status').value === 'all' || status(c) === $('#status').value) && ($('#type').value === '' || c.type === $('#type').value) && (!$('#from').value || c.due >= $('#from').value) && (!$('#to').value || c.due <= $('#to').value)).sort((a,b) => $('#sort').value === 'name' ? a.employee.localeCompare(b.employee) : (a.due.localeCompare(b.due) * ($('#sort').value === 'desc' ? -1 : 1)));
 }
 function render() {
+  refreshTypes();
   $('#total').textContent = checks.length;
   $('#employees').textContent = new Set(checks.map(c=>c.employee.trim().toLowerCase())).size;
   for (const [id, state] of [['current','Up to date'],['soon','Due soon'],['overdue','Overdue']]) $(`#${id}`).textContent = checks.filter(c=>status(c)===state).length;
@@ -28,7 +72,7 @@ function render() {
   }).join('');
 }
 let editing = null;
-$('#add').onclick = () => { editing = null; $('#check-form').reset(); $('#dialog-title').textContent = 'Add a check'; $('#delete').hidden = true; $('#editor').showModal(); };
+$('#add').onclick = () => { editing = null; $('#check-form').reset(); closeTypeCreator(); previousType = typeSelect.value; $('#dialog-title').textContent = 'Add a check'; $('#delete').hidden = true; $('#editor').showModal(); };
 $('#cancel').onclick = () => $('#editor').close();
 $('#rows').onclick = e => {
   const edit = e.target.closest('[data-edit]'), done = e.target.closest('[data-complete]');
@@ -36,6 +80,7 @@ $('#rows').onclick = e => {
     editing = checks.find(c=>c.id===edit.dataset.edit);
     $('#check-form').reset();
     for (const field of ['employee','role','type','title','due','interval','unit']) $('#check-form').elements[field].value = editing[field] || '';
+    closeTypeCreator(); previousType = typeSelect.value;
     $('#dialog-title').textContent = 'Edit check'; $('#delete').hidden = false; $('#editor').showModal();
   }
   if (done) {
@@ -58,7 +103,7 @@ $('#complete-form').elements.date.oninput = updateNext;
 $('#complete-cancel').onclick = () => $('#completion').close();
 $('#complete-form').onsubmit = e => { e.preventDefault(); const date = e.target.elements.date.value; if (save(checks.map(c=>c.id===completing.id ? complete(c,date) : c))) { $('#completion').close(); notify('Completion saved'); } };
 for (const id of ['search','status','type','from','to','sort']) $(`#${id}`).addEventListener('input', render);
-$('#clear').onclick = () => { for (const id of ['search','from','to']) $(`#${id}`).value=''; $('#status').value='all'; $('#type').value='all'; $('#sort').value='asc'; render(); };
+$('#clear').onclick = () => { for (const id of ['search','from','to']) $(`#${id}`).value=''; $('#status').value='all'; $('#type').value=''; $('#sort').value='asc'; render(); };
 document.querySelectorAll('.stat').forEach(b=>b.onclick=()=> { $('#status').value=b.dataset.status; render(); });
 $('#export').onclick = () => {
   const cell = value => '"' + String(value ?? '').replace(/^[=+@-]/, "'$&").replaceAll('"','""') + '"';
